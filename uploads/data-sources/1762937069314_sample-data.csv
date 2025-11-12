@@ -1,0 +1,13 @@
+Date,Region,Department,Agent,Amount,Quantity,Product
+2024-01-15,North,Sales,AG001,15000,50,Product A
+2024-01-20,North,Sales,AG002,22000,75,Product B
+2024-02-05,South,Sales,AG003,18000,60,Product A
+2024-02-10,East,Sales,AG001,25000,80,Product C
+2024-03-12,West,Marketing,AG004,12000,40,Product B
+2024-03-18,North,Sales,AG002,30000,100,Product A
+2024-04-22,South,Marketing,AG003,16000,55,Product C
+2024-05-08,East,Sales,AG005,28000,90,Product B
+2024-06-14,West,Sales,AG001,21000,70,Product A
+2024-07-19,North,Marketing,AG004,19000,65,Product C
+2024-08-25,South,Sales,AG002,24000,85,Product B
+2024-09-30,East,Marketing,AG003,17000,58,Product A

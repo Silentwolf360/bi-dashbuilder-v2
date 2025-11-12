@@ -1,0 +1,598 @@
+// Prisma Schema for BI Dashboard System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+  // When running `prisma migrate dev`, Prisma creates a temporary shadow
+  // database to compute schema changes. If your DB user cannot create
+  // databases, set `SHADOW_DATABASE_URL` to point to a database the user
+  // can access (or to a separate database used as the shadow DB).
+  // Example: SHADOW_DATABASE_URL="mysql://root:password@localhost:3306/prisma_shadow"
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// ============================================
+// AUTHENTICATION & USER MANAGEMENT
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  isActive      Boolean   @default(true)
+  
+  // User attributes for filtering
+  department    String?
+  region        String?
+  agentCode     String?   @unique
+  
+  // Relations
+  roles         UserRole[]
+  sessions      Session[]
+  accounts      Account[]
+  comments      Comment[]
+  auditLogs     AuditLog[]
+  
+  @@index([email])
+  @@index([agentCode])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================
+// ROLE-BASED ACCESS CONTROL
+// ============================================
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false) // System roles cannot be deleted
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  users       UserRole[]
+  permissions Permission[]
+  
+  @@index([name])
+}
+
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+enum PermissionType {
+  VIEW
+  EDIT
+  MANAGE
+  DELETE
+}
+
+enum ResourceType {
+  DASHBOARD
+  DATA_SOURCE
+  METRIC
+  CHART
+  FILTER
+}
+
+model Permission {
+  id           String         @id @default(cuid())
+  roleId       String
+  resourceType ResourceType
+  resourceId   String?        // Null means all resources of this type
+  permission   PermissionType
+  
+  // Data scope filters (JSON)
+  dataFilters  Json?          // e.g., { "region": "North", "department": "Sales" }
+  
+  // Conditional rules (JSON)
+  conditions   Json?          // e.g., { "field": "user.region", "operator": "==", "value": "North" }
+  
+  createdAt    DateTime       @default(now())
+  
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  
+  @@index([roleId])
+  @@index([resourceType, resourceId])
+}
+
+// ============================================
+// DATA SOURCES
+// ============================================
+
+enum DataSourceType {
+  FILE_UPLOAD    // CSV, Excel, JSON
+  SQL_DATABASE   // MySQL, PostgreSQL, SQL Server
+  CLOUD          // Google Sheets, REST API, Snowflake
+  MANUAL         // Manual table creation
+}
+
+enum RefreshFrequency {
+  MANUAL
+  HOURLY
+  DAILY
+  WEEKLY
+}
+
+model DataSource {
+  id              String            @id @default(cuid())
+  name            String            @unique
+  description     String?
+  type            DataSourceType
+  
+  // Connection details (encrypted JSON)
+  connectionConfig Json?            // DB credentials, API keys, etc.
+  
+  // Schema definition
+  schema          Json              // Column definitions, types, primary keys
+  
+  // File upload settings
+  uploadPath      String?
+  filePattern     String?
+  
+  // Refresh settings
+  refreshFrequency RefreshFrequency @default(MANUAL)
+  lastRefreshAt   DateTime?
+  nextRefreshAt   DateTime?
+  
+  // Incremental load
+  incrementalField String?          // Date field for incremental loads
+  
+  isActive        Boolean           @default(true)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  // Relations
+  tables          DataTable[]
+  metrics         Metric[]
+  relationships   Relationship[]    @relation("SourceRelationships")
+  targetRelationships Relationship[] @relation("TargetRelationships")
+  
+  @@index([name])
+  @@index([type])
+}
+
+model DataTable {
+  id           String     @id @default(cuid())
+  dataSourceId String
+  tableName    String
+  displayName  String?
+  
+  // Physical table or view name in database
+  physicalName String
+  
+  // Schema (JSON)
+  columns      Json       // Column definitions
+  
+  rowCount     Int        @default(0)
+  
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  
+  dataSource DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+  
+  @@unique([dataSourceId, tableName])
+  @@index([dataSourceId])
+}
+
+// Data relationships (joins)
+model Relationship {
+  id              String   @id @default(cuid())
+  name            String
+  sourceTableId   String
+  targetTableId   String
+  
+  // Join definition (JSON)
+  joinDefinition  Json     // { "type": "left", "on": [["sourceCol", "targetCol"]] }
+  
+  createdAt       DateTime @default(now())
+  
+  sourceTable DataSource @relation("SourceRelationships", fields: [sourceTableId], references: [id], onDelete: Cascade)
+  targetTable DataSource @relation("TargetRelationships", fields: [targetTableId], references: [id], onDelete: Cascade)
+  
+  @@index([sourceTableId])
+  @@index([targetTableId])
+}
+
+// ============================================
+// METRICS & CALCULATIONS
+// ============================================
+
+enum MetricType {
+  SIMPLE        // Direct aggregation
+  CALCULATED    // Formula-based
+  TIME_INTEL    // Time intelligence function
+}
+
+model Metric {
+  id           String     @id @default(cuid())
+  name         String     @unique
+  displayName  String
+  description  String?
+  type         MetricType
+  
+  // Metric formula/expression
+  expression   String     @db.Text
+  
+  // Parsed formula (JSON for quick execution)
+  parsedFormula Json?
+  
+  // Data source
+  dataSourceId String?
+  
+  // Format settings
+  format       String?    // currency, percent, decimal, integer
+  decimalPlaces Int       @default(2)
+  prefix       String?    // e.g., "$"
+  suffix       String?    // e.g., "%"
+  
+  // Aggregation type for simple metrics
+  aggregation  String?    // SUM, AVG, COUNT, MIN, MAX
+  
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  
+  dataSource DataSource? @relation(fields: [dataSourceId], references: [id], onDelete: SetNull)
+  charts     ChartMetric[]
+  
+  @@index([name])
+  @@index([type])
+}
+
+// ============================================
+// DATE TABLE (Time Intelligence)
+// ============================================
+
+model DateDimension {
+  id            String   @id @default(cuid())
+  date          DateTime @unique
+  year          Int
+  quarter       Int
+  month         Int
+  week          Int
+  day           Int
+  dayOfWeek     Int
+  dayOfYear     Int
+  monthName     String
+  quarterName   String
+  fiscalYear    Int?
+  fiscalQuarter Int?
+  fiscalMonth   Int?
+  isWeekend     Boolean
+  isHoliday     Boolean  @default(false)
+  
+  @@index([date])
+  @@index([year, month])
+  @@index([fiscalYear, fiscalQuarter])
+}
+
+// ============================================
+// DASHBOARDS
+// ============================================
+
+model Dashboard {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  
+  // Layout configuration (JSON)
+  layout      Json?    // Grid layout settings
+  
+  // Thumbnail
+  thumbnail   String?
+  
+  isPublished Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  
+  // Version control
+  version     Int      @default(1)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Relations
+  pages       DashboardPage[]
+  access      DashboardAccess[]
+  
+  @@index([name])
+}
+
+model DashboardPage {
+  id           String   @id @default(cuid())
+  dashboardId  String
+  name         String
+  order        Int
+  
+  // Layout configuration for this page
+  layout       Json?
+  
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  charts    Chart[]
+  filters   Filter[]
+  
+  @@index([dashboardId])
+  @@index([dashboardId, order])
+}
+
+// Dashboard access control
+model DashboardAccess {
+  id          String   @id @default(cuid())
+  dashboardId String
+  roleId      String?
+  userId      String?  // For user-specific access
+  
+  canView     Boolean  @default(true)
+  canEdit     Boolean  @default(false)
+  canManage   Boolean  @default(false)
+  
+  // Data filters for this access (JSON)
+  dataFilters Json?
+  
+  createdAt   DateTime @default(now())
+  
+  dashboard Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  
+  @@index([dashboardId])
+  @@index([roleId])
+  @@index([userId])
+}
+
+// ============================================
+// CHARTS & VISUALIZATIONS
+// ============================================
+
+enum ChartType {
+  LINE
+  BAR
+  AREA
+  PIE
+  DONUT
+  SCATTER
+  BUBBLE
+  TABLE
+  PIVOT
+  KPI_CARD
+  MAP
+  COMBO
+  WATERFALL
+  FUNNEL
+  GAUGE
+  HEATMAP
+}
+
+model Chart {
+  id          String    @id @default(cuid())
+  pageId      String
+  name        String
+  type        ChartType
+  
+  // Grid position and size
+  x           Int
+  y           Int
+  width       Int
+  height      Int
+  
+  // Chart configuration (JSON)
+  config      Json      // Chart-specific settings, colors, axes, etc.
+  
+  // Query definition (JSON)
+  query       Json      // Data query, aggregations, groupings
+  
+  // Visibility rules (JSON)
+  visibility  Json?     // Conditional visibility based on role/user
+  
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  page        DashboardPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  metrics     ChartMetric[]
+  comments    Comment[]
+  
+  @@index([pageId])
+  @@index([type])
+}
+
+// Many-to-many relationship between charts and metrics
+model ChartMetric {
+  id        String   @id @default(cuid())
+  chartId   String
+  metricId  String
+  order     Int
+  
+  // Metric-specific overrides for this chart
+  alias     String?
+  color     String?
+  
+  chart  Chart  @relation(fields: [chartId], references: [id], onDelete: Cascade)
+  metric Metric @relation(fields: [metricId], references: [id], onDelete: Cascade)
+  
+  @@unique([chartId, metricId])
+  @@index([chartId])
+  @@index([metricId])
+}
+
+// ============================================
+// FILTERS
+// ============================================
+
+enum FilterType {
+  DATE
+  SELECT
+  MULTI_SELECT
+  RANGE
+  SEARCH
+  HIERARCHICAL
+}
+
+model Filter {
+  id          String     @id @default(cuid())
+  pageId      String?    // Null means global filter
+  name        String
+  type        FilterType
+  
+  // Filter configuration (JSON)
+  config      Json       // Options, default values, etc.
+  
+  // Target field
+  targetField String
+  targetTable String?
+  
+  // Visibility rules
+  visibleToRoles Json?   // Array of role IDs
+  
+  isGlobal    Boolean    @default(false)
+  isActive    Boolean    @default(true)
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  page DashboardPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  
+  @@index([pageId])
+  @@index([isGlobal])
+}
+
+// ============================================
+// COLLABORATION
+// ============================================
+
+model Comment {
+  id        String   @id @default(cuid())
+  chartId   String
+  userId    String
+  content   String   @db.Text
+  
+  // @mentions (JSON array of user IDs)
+  mentions  Json?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  chart Chart @relation(fields: [chartId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([chartId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================
+// AUDIT & LOGGING
+// ============================================
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  VIEW
+  EXPORT
+  LOGIN
+  LOGOUT
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  userId      String?
+  action      AuditAction
+  resourceType String
+  resourceId  String?
+  
+  // Details (JSON)
+  details     Json?
+  
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime    @default(now())
+  
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  
+  @@index([userId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+}
+
+// ============================================
+// CACHE
+// ============================================
+
+model QueryCache {
+  id         String   @id @default(cuid())
+  queryHash  String   @unique
+  
+  // Cached result (JSON)
+  result     Json
+  
+  // Cache metadata
+  dataSourceId String?
+  // List of metric IDs used. MySQL doesn't support lists of primitives in Prisma,
+  // so store this as JSON (array of strings).
+  metricIds    Json?    // Array of metric IDs used (as JSON)
+  
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  
+  @@index([queryHash])
+  @@index([expiresAt])
+}
